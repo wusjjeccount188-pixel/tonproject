@@ -6,7 +6,7 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
-# Try to import tonutils safely
+# Try to import tonutils safely - updated for latest 2.x
 try:
     from tonutils.client import ToncenterV3Client
     from tonutils.dns import DNS
@@ -60,8 +60,8 @@ class TonTransferRequest(BaseModel):
 @app.get("/health")
 async def health():
     return {
-        "ok": True,
-        "status": "running",
+        "ok": LIBRARY_OK,
+        "status": "running" if LIBRARY_OK else "library_error",
         "testnet": IS_TESTNET,
         "library_loaded": LIBRARY_OK
     }
@@ -81,6 +81,7 @@ if not LIBRARY_OK:
 
 # Only register full endpoints if library loaded
 if LIBRARY_OK:
+    # Initialize client once
     client = ToncenterV3Client(
         api_key=TONCENTER_API_KEY,
         is_testnet=IS_TESTNET,
@@ -93,7 +94,8 @@ if LIBRARY_OK:
         if len(words) not in (12, 24):
             raise ValueError("INVALID_MNEMONIC: Seed must be 12 or 24 words")
         try:
-            wallet = WalletV4R2.from_mnemonic(client, words)
+            # v2.x requires this signature: wallet, pubk, privk, mnemonic
+            wallet, _, _, _ = WalletV4R2.from_mnemonic(client, words)
             return wallet
         except Exception as e:
             err = str(e).lower()
@@ -105,12 +107,14 @@ if LIBRARY_OK:
         domain = f"{username.lower().strip()}.t.me"
         dns = DNS(client)
         try:
+            # DNS resolve in 2.x returns object with .wallet_address
             resolved = await dns.resolve(domain)
-            if resolved and resolved.address:
-                addr = Address(resolved.address)
+            if resolved and resolved.wallet_address:
+                addr = Address(resolved.wallet_address)
                 return addr.to_str(is_user_friendly=True)
             raise ValueError("NO_DNS_RECORD")
-        except Exception:
+        except Exception as e:
+            logger.error(f"DNS Resolve error: {e}")
             raise ValueError(f"CANNOT_RESOLVE: @{username} has no .t.me DNS record (only Fragment NFT usernames usually work)")
 
     @app.post("/ton/buy", response_model=ApiResponse)
@@ -119,15 +123,19 @@ if LIBRARY_OK:
             logger.info(f"Buy request → @{req.username} | {req.amount} TON")
             wallet = await get_wallet_from_seed(req.seed)
 
-            # Rough balance check (optional but recommended)
+            # Check if address derived correctly
+            # logger.info(f"Wallet address: {wallet.address.to_str()}")
+
+            # Balance check (v2.x method)
             balance_nano = await wallet.get_balance()
             balance = balance_nano / 1_000_000_000
             if balance < req.amount + 0.05:
-                raise ValueError(f"INSUFFICIENT_FUNDS: You need at least {req.amount + 0.05:.3f} TON")
+                raise ValueError(f"INSUFFICIENT_FUNDS: Need {req.amount + 0.05:.3f} TON")
 
             recipient = await resolve_username_to_address(req.username)
 
             comment = f"Topup via API | Order: {req.order_id or 'N/A'}"
+            # Transfer method (v2.x)
             tx_hash = await wallet.transfer(
                 destination=recipient,
                 amount=req.amount,
@@ -142,11 +150,10 @@ if LIBRARY_OK:
                 order_id=req.order_id
             )
         except ValueError as ve:
-            code = str(ve).split(":")[0] if ":" in str(ve) else "ERROR"
-            return ApiResponse(ok=False, message=str(ve), error=code, order_id=req.order_id)
+            return ApiResponse(ok=False, message=str(ve), error="VALIDATION_ERROR", order_id=req.order_id)
         except Exception as e:
             logger.error(f"Buy error: {e}")
-            return ApiResponse(ok=False, message="INTERNAL_ERROR", error="INTERNAL_ERROR")
+            return ApiResponse(ok=False, message=str(e), error="INTERNAL_ERROR")
 
     @app.post("/ton/transfer", response_model=ApiResponse)
     async def ton_transfer(req: TonTransferRequest):
@@ -157,7 +164,7 @@ if LIBRARY_OK:
             balance_nano = await wallet.get_balance()
             balance = balance_nano / 1_000_000_000
             if balance < req.amount + 0.05:
-                raise ValueError(f"INSUFFICIENT_FUNDS: You need at least {req.amount + 0.05:.3f} TON")
+                raise ValueError(f"INSUFFICIENT_FUNDS: Need {req.amount + 0.05:.3f} TON")
 
             try:
                 Address(req.to_address)
@@ -179,11 +186,10 @@ if LIBRARY_OK:
                 order_id=req.order_id
             )
         except ValueError as ve:
-            code = str(ve).split(":")[0] if ":" in str(ve) else "ERROR"
-            return ApiResponse(ok=False, message=str(ve), error=code, order_id=req.order_id)
+            return ApiResponse(ok=False, message=str(ve), error="VALIDATION_ERROR", order_id=req.order_id)
         except Exception as e:
             logger.error(f"Transfer error: {e}")
-            return ApiResponse(ok=False, message="INTERNAL_ERROR", error="INTERNAL_ERROR")
+            return ApiResponse(ok=False, message=str(e), error="INTERNAL_ERROR")
 
 # Run command (for local testing)
 if __name__ == "__main__":
