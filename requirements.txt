@@ -1,4 +1,4 @@
 fastapi
 uvicorn[standard]
 python-dotenv
-tonutils
+tonutils>=2.0.5
