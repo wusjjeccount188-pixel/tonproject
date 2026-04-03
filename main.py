@@ -7,9 +7,10 @@ from dotenv import load_dotenv
 from fastapi import FastAPI, HTTPException
 from pydantic import BaseModel, Field
 
+# Updated imports for tonutils 2.x
 from tonutils.client import ToncenterV3Client
 from tonutils.dns import DNS
-from tonutils.utils import Address
+from tonutils.utils.address import Address
 from tonutils.wallet import WalletV4R2
 
 # Load environment variables
@@ -20,7 +21,7 @@ IS_TESTNET = os.getenv("IS_TESTNET", "false").lower() == "true"
 TONCENTER_API_KEY = os.getenv("TONCENTER_API_KEY")
 
 if not TONCENTER_API_KEY:
-    raise RuntimeError("TONCENTER_API_KEY environment variable is required!")
+    raise RuntimeError("TONCENTER_API_KEY environment variable is required! Add it in Railway Variables.")
 
 # Setup logging
 logging.basicConfig(level=logging.INFO, format="%(asctime)s - %(levelname)s - %(message)s")
@@ -64,7 +65,7 @@ async def get_wallet_from_seed(seed: str):
     if len(words) not in (12, 24):
         raise ValueError("INVALID_MNEMONIC: Seed must be 12 or 24 words")
     try:
-        wallet, _, _, _ = WalletV4R2.from_mnemonic(client, words)
+        wallet = WalletV4R2.from_mnemonic(client, words)  # Simplified in newer versions
         return wallet
     except Exception as e:
         err = str(e).lower()
@@ -89,7 +90,7 @@ async def resolve_username_to_address(username: str) -> str:
     dns = DNS(client)
     try:
         resolved = await dns.resolve(domain)
-        if resolved and hasattr(resolved, 'address') and resolved.address:
+        if resolved and resolved.address:
             addr = Address(resolved.address)
             return addr.to_str(is_user_friendly=True)
         raise ValueError("NO_DNS_RECORD")
